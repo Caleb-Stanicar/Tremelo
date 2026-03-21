@@ -1,21 +1,29 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 
-// Define the two knobs: Rate (Hz) and Depth (0–1)
+const juce::StringArray TremoloProcessor::divisionNames { "1/32", "1/16", "1/8", "1/4", "1/2", "1/1", "2/1" };
+const float TremoloProcessor::divisionMultipliers[numDivisions] { 0.125f, 0.25f, 0.5f, 1.0f, 2.0f, 4.0f, 8.0f };
+
 static juce::AudioProcessorValueTreeState::ParameterLayout createParameters()
 {
     return {
-        std::make_unique<juce::AudioParameterFloat>(
-            "rate",          // parameter ID
-            "Rate",          // display name
-            juce::NormalisableRange<float>(0.1f, 20.0f, 0.01f),  // min, max, step
-            4.0f             // default: 4 Hz
+        std::make_unique<juce::AudioParameterBool>(
+            "sync", "Sync to BPM", false   // default: off (free Hz mode)
         ),
         std::make_unique<juce::AudioParameterFloat>(
-            "depth",
-            "Depth",
+            "rate", "Rate",
+            juce::NormalisableRange<float>(0.1f, 20.0f, 0.01f),
+            4.0f   // default: 4 Hz
+        ),
+        std::make_unique<juce::AudioParameterChoice>(
+            "division", "Division",
+            TremoloProcessor::divisionNames,
+            3      // default index 3 = "1/4"
+        ),
+        std::make_unique<juce::AudioParameterFloat>(
+            "depth", "Depth",
             juce::NormalisableRange<float>(0.0f, 1.0f, 0.01f),
-            0.8f             // default: 80% depth
+            0.8f
         )
     };
 }
@@ -28,41 +36,54 @@ TremoloProcessor::TremoloProcessor()
 {
 }
 
-void TremoloProcessor::prepareToPlay(double sampleRate, int /*samplesPerBlock*/)
+void TremoloProcessor::prepareToPlay(double sampleRate, int)
 {
     currentSampleRate = sampleRate;
-    lfoPhase = 0.0f;  // reset LFO when playback starts
+    lfoPhase = 0.0f;
 }
 
 void TremoloProcessor::processBlock(juce::AudioBuffer<float>& buffer,
-                                    juce::MidiBuffer& /*midiMessages*/)
+                                    juce::MidiBuffer&)
 {
-    // Read current knob values
-    float rate  = *parameters.getRawParameterValue("rate");
+    bool  sync  = *parameters.getRawParameterValue("sync") > 0.5f;
     float depth = *parameters.getRawParameterValue("depth");
 
-    // How much the LFO phase advances each sample
-    float phaseIncrement = (2.0f * juce::MathConstants<float>::pi * rate)
-                           / (float)currentSampleRate;
+    float rateHz;
+
+    if (sync)
+    {
+        // Read BPM from the DAW — fall back to 120 if unavailable
+        if (auto* playHead = getPlayHead())
+            if (auto pos = playHead->getPosition())
+                if (auto bpm = pos->getBpm())
+                    currentBpm = *bpm;
+
+        int   divIndex      = (int) *parameters.getRawParameterValue("division");
+        float beatsPerCycle = divisionMultipliers[divIndex];
+        float beatsPerSec   = (float) currentBpm / 60.0f;
+        rateHz = beatsPerSec / beatsPerCycle;
+    }
+    else
+    {
+        rateHz = *parameters.getRawParameterValue("rate");
+    }
+
+    float phaseIncrement = (2.0f * juce::MathConstants<float>::pi * rateHz)
+                           / (float) currentSampleRate;
 
     int numChannels = buffer.getNumChannels();
     int numSamples  = buffer.getNumSamples();
 
     for (int sample = 0; sample < numSamples; ++sample)
     {
-        // LFO outputs a value from (1 - depth) to 1.0
-        // When depth=1: gain swings 0 → 1 (full tremolo)
-        // When depth=0: gain stays 1.0 (bypassed)
         float lfoValue = 1.0f - depth * 0.5f * (1.0f - std::sin(lfoPhase));
 
-        // Apply the same gain to every channel at this sample
         for (int channel = 0; channel < numChannels; ++channel)
         {
             float* channelData = buffer.getWritePointer(channel);
             channelData[sample] *= lfoValue;
         }
 
-        // Advance the LFO and wrap it at 2π to prevent float overflow
         lfoPhase += phaseIncrement;
         if (lfoPhase >= 2.0f * juce::MathConstants<float>::pi)
             lfoPhase -= 2.0f * juce::MathConstants<float>::pi;
