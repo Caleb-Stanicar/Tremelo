@@ -76,11 +76,15 @@ void TremoloProcessor::processBlock(juce::AudioBuffer<float>& buffer,
 
     for (int sample = 0; sample < numSamples; ++sample)
     {
-        float lfoValue = 1.0f - depth * 0.5f * (1.0f - std::sin(lfoPhase));
+        // Left channel: LFO as normal
+        // Right channel: LFO offset by π (half cycle), so panning sweeps left↔right
+        float lfoLeft  = 1.0f - depth * 0.5f * (1.0f - std::sin(lfoPhase));
+        float lfoRight = 1.0f - depth * 0.5f * (1.0f - std::sin(lfoPhase + juce::MathConstants<float>::pi));
 
         for (int channel = 0; channel < numChannels; ++channel)
         {
             float* channelData = buffer.getWritePointer(channel);
+            float  lfoValue    = (channel == 0) ? lfoLeft : lfoRight;
             channelData[sample] *= lfoValue;
         }
 
