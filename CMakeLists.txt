@@ -1,3 +1,4 @@
+# Tremolo audio plugin
 cmake_minimum_required(VERSION 3.22)
 project(Tremolo VERSION 0.1.0)
 
