@@ -1,4 +1,4 @@
-# Tremolo audio plugin
+# Tremolo / Auto-Pan / Wah audio plugin
 cmake_minimum_required(VERSION 3.22)
 project(Tremolo VERSION 0.1.0)
 
@@ -13,7 +13,7 @@ juce_add_plugin(Tremolo
     PLUGIN_MANUFACTURER_CODE Mypl
     PLUGIN_CODE Trem
     FORMATS VST3 AU
-    PRODUCT_NAME "Tremolo"
+    PRODUCT_NAME "Tremolo Auto-Pan Wah"
 )
 
 juce_generate_juce_header(Tremolo)

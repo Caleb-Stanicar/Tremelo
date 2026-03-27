@@ -1,6 +1,6 @@
-# Tremolo / Wah Plugin
+# Tremolo / Auto-Pan / Wah Plugin
 
-A JUCE audio plugin (VST3 + AU) combining a stereo tremolo/auto-pan and a BPM-synced wah effect.
+A JUCE audio plugin (VST3 + AU) combining a BPM-synced stereo tremolo/auto-pan and a BPM-synced wah effect.
 
 ---
 
@@ -83,3 +83,29 @@ cmake --build build --config Debug
 ```
 
 Output: `build/Tremolo_artefacts/Debug/VST3/` and `.../AU/`
+
+---
+
+## Install to Ableton Live (macOS)
+
+Build the plugin first, then copy the formats you want into the system plugin folders.
+
+**AU (recommended for Ableton):**
+```bash
+cp -r "build/Tremolo_artefacts/Debug/AU/Tremolo Auto-Pan Wah.component" \
+      ~/Library/Audio/Plug-Ins/Components/
+```
+
+**VST3:**
+```bash
+cp -r "build/Tremolo_artefacts/Debug/VST3/Tremolo Auto-Pan Wah.vst3" \
+      ~/Library/Audio/Plug-Ins/VST3/
+```
+
+After copying, rescan in Ableton:
+1. Open Ableton → **Preferences** → **Plug-ins** tab
+2. Enable **Use Audio Units** and/or **Use VST3 Plug-In Custom Folder**
+3. Click **Rescan** (or restart Ableton)
+4. The plugin will appear under **Audio Effects → Audio Units → MyPlugins** (AU) or in the VST3 browser
+
+For a Release build, replace `Debug` with `Release` in the paths above.
