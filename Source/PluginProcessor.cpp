@@ -54,12 +54,39 @@ static juce::AudioProcessorValueTreeState::ParameterLayout createParameters()
     };
 }
 
+static float divisionToHz(int index, float beatsPerSec, const float* multipliers)
+{
+    return beatsPerSec / multipliers[index];
+}
+
 TremoloProcessor::TremoloProcessor()
     : AudioProcessor(BusesProperties()
         .withInput("Input",  juce::AudioChannelSet::stereo(), true)
         .withOutput("Output", juce::AudioChannelSet::stereo(), true)),
       parameters(*this, nullptr, "Parameters", createParameters())
 {
+    syncParam        = parameters.getRawParameterValue("sync");
+    rateParam        = parameters.getRawParameterValue("rate");
+    divisionParam    = parameters.getRawParameterValue("division");
+    depthParam       = parameters.getRawParameterValue("depth");
+    wahEnabledParam  = parameters.getRawParameterValue("wahEnabled");
+    wahDepthParam    = parameters.getRawParameterValue("wahDepth");
+    wahDivisionParam = parameters.getRawParameterValue("wahDivision");
+    wahOffsetParam   = parameters.getRawParameterValue("wahOffset");
+}
+
+void TremoloProcessor::getStateInformation(juce::MemoryBlock& destData)
+{
+    auto state = parameters.copyState();
+    std::unique_ptr<juce::XmlElement> xml(state.createXml());
+    copyXmlToBinary(*xml, destData);
+}
+
+void TremoloProcessor::setStateInformation(const void* data, int sizeInBytes)
+{
+    std::unique_ptr<juce::XmlElement> xmlState(getXmlFromBinary(data, sizeInBytes));
+    if (xmlState && xmlState->hasTagName(parameters.state.getType()))
+        parameters.replaceState(juce::ValueTree::fromXml(*xmlState));
 }
 
 void TremoloProcessor::prepareToPlay(double sampleRate, int)
@@ -88,20 +115,14 @@ void TremoloProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     // Tremolo / Auto-pan
     // -------------------------------------------------------------------------
     {
-        bool  sync  = *parameters.getRawParameterValue("sync") > 0.5f;
-        float depth = *parameters.getRawParameterValue("depth");
+        bool  sync  = *syncParam > 0.5f;
+        float depth = *depthParam;
 
         float rateHz;
         if (sync)
-        {
-            int   divIndex      = (int)*parameters.getRawParameterValue("division");
-            float beatsPerCycle = divisionMultipliers[divIndex];
-            rateHz = beatsPerSec / beatsPerCycle;
-        }
+            rateHz = divisionToHz((int)*divisionParam, beatsPerSec, divisionMultipliers);
         else
-        {
-            rateHz = *parameters.getRawParameterValue("rate");
-        }
+            rateHz = *rateParam;
 
         const float phaseInc = (2.0f * juce::MathConstants<float>::pi * rateHz)
                                / (float)currentSampleRate;
@@ -117,9 +138,7 @@ void TremoloProcessor::processBlock(juce::AudioBuffer<float>& buffer,
                 data[s] *= (ch == 0) ? lfoLeft : lfoRight;
             }
 
-            lfoPhase += phaseInc;
-            if (lfoPhase >= 2.0f * juce::MathConstants<float>::pi)
-                lfoPhase -= 2.0f * juce::MathConstants<float>::pi;
+            lfoPhase = std::fmod(lfoPhase + phaseInc, juce::MathConstants<float>::twoPi);
         }
     }
 
@@ -130,21 +149,20 @@ void TremoloProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     // exponentially between lowFreq and highFreq based on depth + LFO.
     // Q controls the resonant peak width (classic wah character).
     // -------------------------------------------------------------------------
-    bool wahEnabled = *parameters.getRawParameterValue("wahEnabled") > 0.5f;
+    bool wahEnabled = *wahEnabledParam > 0.5f;
 
     if (wahEnabled)
     {
-        const float wahDepth = *parameters.getRawParameterValue("wahDepth");
+        const float wahDepth = *wahDepthParam;
 
-        const int   wahDivIdx      = (int)*parameters.getRawParameterValue("wahDivision");
-        const float wahBeatsPerCycle = wahDivisionMultipliers[wahDivIdx];
-        const float wahRateHz      = beatsPerSec / wahBeatsPerCycle;
-        const float wahPhaseInc    = (2.0f * juce::MathConstants<float>::pi * wahRateHz)
-                                     / (float)currentSampleRate;
+        const float wahRateHz   = divisionToHz((int)*wahDivisionParam, beatsPerSec, wahDivisionMultipliers);
+        const float wahPhaseInc = (2.0f * juce::MathConstants<float>::pi * wahRateHz)
+                                  / (float)currentSampleRate;
 
-        const int   wahOffsetIdx = (int)*parameters.getRawParameterValue("wahOffset");
-        const float offsetPhase  = (wahOffsetBeats[wahOffsetIdx] / wahBeatsPerCycle)
-                                   * 2.0f * juce::MathConstants<float>::pi;
+        const int   wahOffsetIdx    = (int)*wahOffsetParam;
+        const float wahBeatsPerCycle = wahDivisionMultipliers[(int)*wahDivisionParam];
+        const float offsetPhase     = (wahOffsetBeats[wahOffsetIdx] / wahBeatsPerCycle)
+                                      * 2.0f * juce::MathConstants<float>::pi;
 
         // Frequency sweep range — adjust these to taste
         constexpr float lowFreq  = 300.0f;
@@ -163,8 +181,12 @@ void TremoloProcessor::processBlock(juce::AudioBuffer<float>& buffer,
             // Exponential frequency sweep: sounds musical, mirrors how we hear pitch
             const float centerFreq = midFreq * std::exp(wahDepth * (lfo - 0.5f) * logRange);
 
+            // Clamp to safe range before computing SVF coefficient —
+            // prevents f > 2 which breaks Chamberlin topology stability
+            const float safeFreq = juce::jlimit(20.0f, (float)currentSampleRate * 0.49f, centerFreq);
+
             // SVF coefficient (Chamberlin topology, valid for fc << fs)
-            const float f = 2.0f * std::sin(juce::MathConstants<float>::pi * centerFreq
+            const float f = 2.0f * std::sin(juce::MathConstants<float>::pi * safeFreq
                                             / (float)currentSampleRate);
 
             for (int ch = 0; ch < numChannels; ++ch)
@@ -180,12 +202,11 @@ void TremoloProcessor::processBlock(juce::AudioBuffer<float>& buffer,
                 svfBand[ch]  += f * high;
                 svfLow[ch]   += f * svfBand[ch];
 
-                data[s] = svfBand[ch];  // bandpass output = the wah
+                // Clamp output — resonance (Q=4) can push peaks above 0 dBFS
+                data[s] = juce::jlimit(-1.0f, 1.0f, svfBand[ch]);
             }
 
-            wahPhase += wahPhaseInc;
-            if (wahPhase >= 2.0f * juce::MathConstants<float>::pi)
-                wahPhase -= 2.0f * juce::MathConstants<float>::pi;
+            wahPhase = std::fmod(wahPhase + wahPhaseInc, juce::MathConstants<float>::twoPi);
         }
     }
     else

@@ -21,8 +21,8 @@ public:
     void setCurrentProgram(int) override {}
     const juce::String getProgramName(int) override { return "Default"; }
     void changeProgramName(int, const juce::String&) override {}
-    void getStateInformation(juce::MemoryBlock&) override {}
-    void setStateInformation(const void*, int) override {}
+    void getStateInformation(juce::MemoryBlock& destData) override;
+    void setStateInformation(const void* data, int sizeInBytes) override;
 
     juce::AudioProcessorEditor* createEditor() override;
     bool hasEditor() const override { return true; }
@@ -53,6 +53,16 @@ private:
     // State variable filter state per channel (for wah)
     float svfLow[2]  = { 0.0f, 0.0f };
     float svfBand[2] = { 0.0f, 0.0f };
+
+    // Cached parameter pointers — avoids string lookups in processBlock
+    std::atomic<float>* syncParam        = nullptr;
+    std::atomic<float>* rateParam        = nullptr;
+    std::atomic<float>* divisionParam    = nullptr;
+    std::atomic<float>* depthParam       = nullptr;
+    std::atomic<float>* wahEnabledParam  = nullptr;
+    std::atomic<float>* wahDepthParam    = nullptr;
+    std::atomic<float>* wahDivisionParam = nullptr;
+    std::atomic<float>* wahOffsetParam   = nullptr;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(TremoloProcessor)
 };
